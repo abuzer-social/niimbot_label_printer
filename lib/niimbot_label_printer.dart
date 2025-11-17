@@ -1,86 +1,51 @@
-import 'dart:ui' as ui;
-import 'dart:math' as math;
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'dart:async';
+import 'dart:typed_data';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
+import 'src/niimbot_printer_impl.dart';
 
+/// Main class for Niimbot label printer using BLE
 class NiimbotLabelPrinter {
-  final MethodChannel methodChannel = const MethodChannel('niimbot_label_printer');
+  final NiimbotPrinterImpl _impl = NiimbotPrinterImpl();
 
-  Future<String?> getPlatformVersion() async {
-    final version = await methodChannel.invokeMethod<String>('getPlatformVersion');
-    return version;
-  }
-
-  Future<bool> requestPermissionGrant() async {
-    final bool? result = await methodChannel.invokeMethod<bool>('ispermissionbluetoothgranted');
-    return result ?? false;
-  }
-
+  /// Check if Bluetooth is enabled
   Future<bool> bluetoothIsEnabled() async {
-    final bool? result = await methodChannel.invokeMethod<bool>('isBluetoothEnabled');
-    return result ?? false;
+    return await _impl.bluetoothIsEnabled();
   }
 
+  /// Check if connected to a printer
   Future<bool> isConnected() async {
-    final bool? result = await methodChannel.invokeMethod<bool>('isConnected');
-    return result ?? false;
+    return await _impl.isConnected();
   }
 
-  /// Returns bluetooths paired devices
-  Future<List<BluetoothDevice>> getPairedDevices() async {
-    final List<Object?>? result = await methodChannel.invokeMethod<List<Object?>?>('getPairedDevices');
-    List<BluetoothDevice> devices = [];
-    for (Object? o in result!) {
-      devices.add(BluetoothDevice.fromString(o.toString()));
-    }
-    return devices;
+  /// Get paired/bonded devices (returns flutter_blue_plus BluetoothDevice)
+  Future<List<fbp.BluetoothDevice>> getPairedDevices() async {
+    return await _impl.getPairedDevices();
   }
 
-  Future<bool> connect(BluetoothDevice device) async {
-    final bool? result = await methodChannel.invokeMethod<bool>('connect', device.address);
-    return result ?? false;
+  /// Start scanning for BLE devices (returns flutter_blue_plus BluetoothDevice)
+  Stream<fbp.BluetoothDevice> startScan(
+      {Duration timeout = const Duration(seconds: 10)}) {
+    return _impl.startScan(timeout: timeout);
   }
 
-  Future<bool> disconnect() async {
-    final bool? result = await methodChannel.invokeMethod<bool>('disconnect');
-    return result ?? false;
+  /// Connect to a Bluetooth device (accepts flutter_blue_plus BluetoothDevice)
+  Future<bool> connect(fbp.BluetoothDevice device) async {
+    return await _impl.connect(device);
   }
 
+  /// Disconnect from the printer
+  Future<void> disconnect() async {
+    await _impl.disconnect();
+  }
+
+  /// Send print data to the printer
   Future<bool> send(PrintData data) async {
-    final bool? result = await methodChannel.invokeMethod<bool>('send', data.toMap());
-    //final bool? result = await methodChannel.invokeMethod<bool>('send', bytes);
-    return result ?? false;
-  }
-
-  /// Not work:
-  /// ui.Image rotatedImage = await rotateImage(originalImage,90); // 90 grados
-  static Future<ui.Image> rotateImage(ui.Image image, double grades) async {
-    double angleInRadians = grades * (math.pi / 180);
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-
-    final double longestSide = math.max(image.width, image.height).toDouble();
-    final size = Size(longestSide, longestSide);
-
-    final double halfWidth = image.width / 2;
-    final double halfHeight = image.height / 2;
-
-    // Traslada el canvas al centro
-    canvas.translate(size.width / 2, size.height / 2);
-
-    // Rota el canvas
-    canvas.rotate(angleInRadians);
-
-    // Dibuja la imagen con su centro en el origen
-    canvas.drawImage(image, Offset(-halfWidth, -halfHeight), Paint());
-
-    final picture = recorder.endRecording();
-    final rotatedImage = await picture.toImage(size.width.toInt(), size.height.toInt());
-
-    return rotatedImage;
+    return await _impl.send(data);
   }
 }
 
+/// Compatibility wrapper for BluetoothDevice
+/// Converts between flutter_blue_plus BluetoothDevice and the legacy format
 class BluetoothDevice {
   late String name;
   late String address;
@@ -97,8 +62,28 @@ class BluetoothDevice {
   }
 
   BluetoothDevice.fromMap(Map<String, dynamic> map) {
-    name = map['name'];
-    address = map['address'];
+    name = map['name'] ?? '';
+    address = map['address'] ?? '';
+  }
+
+  /// Create from flutter_blue_plus BluetoothDevice
+  BluetoothDevice.fromFbpDevice(fbp.BluetoothDevice device) {
+    name = device.platformName.isNotEmpty ? device.platformName : 'Unknown';
+    address = device.remoteId.str;
+  }
+
+  /// Convert to flutter_blue_plus BluetoothDevice
+  /// Note: This requires finding the device from flutter_blue_plus
+  /// Use getPairedDevices() or startScan() to get the actual fbp.BluetoothDevice
+  Future<fbp.BluetoothDevice?> toFbpDevice() async {
+    // Try to find in paired devices
+    final paired = await fbp.FlutterBluePlus.bondedDevices;
+    for (final device in paired) {
+      if (device.remoteId.str == address || device.platformName == name) {
+        return device;
+      }
+    }
+    return null;
   }
 
   Map<String, dynamic> toMap() {
